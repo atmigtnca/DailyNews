@@ -1,0 +1,60 @@
+name: Send Newsletter to Slack
+
+on:
+  push:
+    branches:
+      - main  # 혹은 master 등 기본 브랜치 이름
+    paths:
+      - '/Users/seojongho/INGBOT2/DailyNews/뉴스레터'  # ◀◀◀ 여기에 뉴스레터 파일 경로를 정확히 적어주세요
+
+jobs:
+  send-newsletter:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 리포지토리의 파일에 접근하기 위해 코드를 체크아웃합니다.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 뉴스레터 파일 내용을 읽어와서 변수로 저장합니다.
+      # (Slack JSON 형식에 맞게 개행 문자를 \n으로 변경)
+      - name: Read newsletter file
+        id: newsletter
+        run: |
+          content=$(cat '/Users/seojongho/INGBOT2/DailyNews/뉴스레터') # ◀◀◀ 여기도 파일 경로를 적어주세요
+          content="${content//'%'/'%25'}"
+          content="${content//$'\n'/'\\n'}"
+          content="${content//$'\r'/'\\r'}"
+          echo "::set-output name=content::$content"
+
+      # 3. Slack 공식 GitHub Action을 사용해 메시지를 보냅니다.
+      - name: Send to Slack
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          # Slack Webhook 페이로드(메시지 형식)를 정의합니다.
+          # steps.newsletter.outputs.content 변수로 파일 내용을 주입합니다.
+          payload: |
+            {
+              "text": "오늘의 뉴스레터가 도착했습니다! 🚀",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "📰 오늘의 뉴스레터"
+                  }
+                },
+                {
+                  "type": "divider"
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ steps.newsletter.outputs.content }}"
+                  }
+                }
+              ]
+            }
+        env:
+          # 2번에서 등록한 GitHub Secret을 사용합니다.
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
