@@ -5,31 +5,27 @@ on:
     branches:
       - main
     paths:
-      # Detect changes in all .md files within the 'DailyNews/뉴스레터/' folder
-      - 'DailyNews/뉴스레터/**.md'
-      # Detect changes in all .md files within the 'DailyNews/프로덕트/' folder (Added)
-      - 'DailyNews/프로덕트/**.md'
+      # Detect changes in all .md files within the '뉴스레터' folder (at root)
+      - '뉴스레터/**.md'
+      # Detect changes in all .md files within the '프로덕트' folder (at root)
+      - '프로덕트/**.md'
 
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
       # 1. Check out the repository code.
-      #    'fetch-depth: 2' is required to compare the last commit (HEAD)
-      #    with the previous one (HEAD~1).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 2 
 
       # 2. Automatically find the path of the changed file from the last commit.
       - name: Find changed newsletter file
         id: find_file
         run: |
-          # 'git diff --name-only HEAD~1 HEAD': Lists files changed in the last commit.
-          # 'grep -E ...': Filters the list for .md files in our target paths ('뉴스레터' or '프로덕트').
-          # 'head -n 1': Selects only the first file if multiple files were changed.
-          CHANGED_FILE=$(git diff --name-only HEAD~1 HEAD | grep -E 'DailyNews/뉴스레터/.*\.md|DailyNews/프로덕트/.*\.md' | head -n 1)
+          # Filters the list for .md files in our target paths ('뉴스레터' or '프로덕트')
+          CHANGED_FILE=$(git diff --name-only HEAD~1 HEAD | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
             echo "::error::No newsletter file found in the last commit's changes."
@@ -65,7 +61,6 @@ jobs:
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    # Also display the file path in the Slack message header.
                     "text": "📰 새 소식 (${_ steps.find_file.outputs.filepath }})"
                   }
                 },
