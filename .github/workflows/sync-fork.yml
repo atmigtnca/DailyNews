@@ -2,8 +2,10 @@ name: Sync Fork
 
 on:
   schedule:
-    # Runs at 00:00 UTC every day
-    - cron: '0 0 * * *'
+    # Runs at 00:30 UTC (9:30 AM KST) to catch the morning commit
+    - cron: '30 0 * * *'
+    # Runs at 03:30 UTC (12:30 PM KST) to catch the ~12:00 PM commit
+    - cron: '30 3 * * *'
   # Allows manual triggering from the Actions tab
   workflow_dispatch:
 
