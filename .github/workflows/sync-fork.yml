@@ -14,12 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 1. Check out the fork repository
-      #    Uses MY_PAT to ensure the subsequent push triggers other workflows
       - name: Checkout Fork
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.MY_PAT }}
-          fetch-depth: 0 # Fetches all history for a clean merge
+          fetch-depth: 0 
 
       # 2. Add the original (upstream) repository as a remote
       - name: Add upstream remote
@@ -33,11 +32,15 @@ jobs:
       - name: Merge from upstream
         run: |
           git checkout main
-          git merge upstream/main
+          
+          # ◀◀◀ CRITICAL FIX ◀◀◀
+          # Set user identity BEFORE merging, as merging can create a commit.
           git config --global user.name 'github-actions-sync'
           git config --global user.email 'action@github.com'
+          
+          # Now, merge the changes
+          git merge upstream/main
 
       # 5. Push the merged changes back to the fork (origin)
-      #    This push will trigger the 'send_newsletter.yml' workflow
       - name: Push changes
         run: git push origin main
