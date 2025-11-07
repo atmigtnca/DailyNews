@@ -3,68 +3,70 @@ name: Send Newsletter to Slack
 on:
   push:
     branches:
-      - main  # ◀◀◀ 사용 중인 브랜치 이름 (main 또는 master)
+      - main
     paths:
-      # 'DailyNews/뉴스레터/' 폴더 안에 있는 모든 .md 파일의 변경을 감지
+      # Detect changes in all .md files within the 'DailyNews/뉴스레터/' folder
       - 'DailyNews/뉴스레터/**.md'
+      # Detect changes in all .md files within the 'DailyNews/프로덕트/' folder (Added)
+      - 'DailyNews/프로덕트/**.md'
 
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. 리포지토리 코드를 체크아웃합니다.
-      #    이때, 'fetch-depth: 2'로 설정해야 마지막 커밋(HEAD)과 
-      #    그 직전 커밋(HEAD~1)을 비교할 수 있습니다.
+      # 1. Check out the repository code.
+      #    'fetch-depth: 2' is required to compare the last commit (HEAD)
+      #    with the previous one (HEAD~1).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 
+          fetch-depth: 2
 
-      # 2. 마지막 커밋에서 변경된 뉴스레터 파일의 경로를 자동으로 찾습니다.
+      # 2. Automatically find the path of the changed file from the last commit.
       - name: Find changed newsletter file
         id: find_file
         run: |
-          # 'git diff --name-only HEAD~1 HEAD' : 마지막 커밋에서 변경된 파일 목록을 출력
-          # 'grep 'DailyNews/뉴스레터/.*\.md'' : 그 목록에서 우리가 원하는 경로의 .md 파일만 필터링
-          # 'head -n 1' : 혹시 파일이 여러 개여도 첫 번째 파일만 선택
-          CHANGED_FILE=$(git diff --name-only HEAD~1 HEAD | grep 'DailyNews/뉴스레터/.*\.md' | head -n 1)
-          
+          # 'git diff --name-only HEAD~1 HEAD': Lists files changed in the last commit.
+          # 'grep -E ...': Filters the list for .md files in our target paths ('뉴스레터' or '프로덕트').
+          # 'head -n 1': Selects only the first file if multiple files were changed.
+          CHANGED_FILE=$(git diff --name-only HEAD~1 HEAD | grep -E 'DailyNews/뉴스레터/.*\.md|DailyNews/프로덕트/.*\.md' | head -n 1)
+
           if [ -z "$CHANGED_FILE" ]; then
             echo "::error::No newsletter file found in the last commit's changes."
-            exit 1 # 뉴스레터 파일을 못 찾으면 워크플로우를 실패 처리
+            exit 1 # Fail the workflow if no matching file is found.
           fi
-          
+
           echo "Found file: $CHANGED_FILE"
-          # 찾은 파일 경로를 다음 스텝에서 쓸 수 있도록 출력 변수로 설정
+          # Set the found file path as an output variable for the next step.
           echo "::set-output name=filepath::$CHANGED_FILE"
 
-      # 3. 위에서 찾은 파일의 내용을 읽어 변수로 저장합니다.
+      # 3. Read the content of the file found above and save it as a variable.
       - name: Read newsletter file
         id: newsletter
         run: |
-          # 2번 단계에서 찾은 동적 파일 경로(${...})를 cat 명령어로 읽음
+          # Read the content using the dynamic file path (${...}) found in step 2.
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
-          
-          # Slack JSON 형식에 맞게 특수 문자 변환
+
+          # Escape special characters for Slack JSON.
           content="${content//'%'/'%25'}"
           content="${content//$'\n'/'\\n'}"
           content="${content//$'\r'/'\\r'}"
           echo "::set-output name=content::$content"
 
-      # 4. Slack으로 전송합니다.
+      # 4. Send to Slack.
       - name: Send to Slack
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
             {
-              "text": "오늘의 뉴스레터(${_ steps.find_file.outputs.filepath }})가 도착했습니다! 🚀",
+              "text": "새 소식(${_ steps.find_file.outputs.filepath }})이 도착했습니다! 🚀",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    # Slack 제목에도 찾은 파일 경로를 표시
-                    "text": "📰 오늘의 뉴스레터 (${_ steps.find_file.outputs.filepath }})"
+                    # Also display the file path in the Slack message header.
+                    "text": "📰 새 소식 (${_ steps.find_file.outputs.filepath }})"
                   }
                 },
                 {
@@ -80,5 +82,5 @@ jobs:
               ]
             }
         env:
-          # 시크릿에 저장된 Webhook URL
+          # Use the Webhook URL stored in Secrets.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
