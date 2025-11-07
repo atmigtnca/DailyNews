@@ -2,40 +2,31 @@ name: Sync Fork
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 매일 00:00 UTC (한국 시간 오전 9시)에 실행
-  workflow_dispatch:     # 수동으로도 실행 가능하게 함
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      # 1. 내 포크 리포지토리를 체크아웃합니다.
-      #    이때 GITHUB_TOKEN 대신, 방금 만든 PAT를 사용해야
-      #    이후의 push가 다른 액션(Slack 알림)을 트리거할 수 있습니다.
       - name: Checkout Fork
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.MY_PAT }} # ◀◀◀ 2단계에서 등록한 Secret 이름
-          fetch-depth: 0 # 모든 커밋 히스토리를 가져와야 충돌 없이 병합 가능
+          token: ${{ secrets.MY_PAT }}
+          fetch-depth: 0
 
-      # 2. 원본(upstream) 리포지토리를 'upstream'이라는 이름으로 추가합니다.
       - name: Add upstream remote
-        run: git remote add upstream https://github.com/atmigtnca/DailyNews.git # ◀◀◀ 원본 리포지토리 주소로 변경!
+        run: git remote add upstream https://github.com/GENEXIS-AI/DailyNews.git
 
-      # 3. 원본 리포지토리에서 최신 내용을 가져옵니다.
       - name: Fetch from upstream
         run: git fetch upstream
 
-      # 4. 내 'main' 브랜치로 원본의 'main' 브랜치 내용을 병합합니다.
-      #    (브랜치 이름(main)이 다르면 맞춰서 수정해 주세요)
       - name: Merge from upstream
         run: |
           git checkout main
           git merge upstream/main
-          git config --global user.name 'atmigtnca' # 커밋에 사용할 이름
-          git config --global user.email 'seojh9173@gmail.com'   # 커밋에 사용할 이메일
+          git config --global user.name 'github-actions-sync'
+          git config --global user.email 'action@github.com'
 
-      # 5. 병합된 최신 내용을 내 포크(origin)에 푸시합니다.
-      #    (이 push가 'send_newsletter.yml'을 트리거합니다)
       - name: Push changes
         run: git push origin main
