@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      # All paths provided by the user
       - '뉴스레터/**.md'
       - '프로덕트/**.md'
       - '논문/**.md'
@@ -25,15 +26,12 @@ jobs:
         run: |
           echo "Comparing commits: ${{ github.event.before }} ... ${{ github.event.after }}"
           
-          # --- DIAGNOSTIC STEP (NEW) ---
-          # Print ALL changed files to the log BEFORE filtering
-          echo "--- All changed files ---"
-          git diff --name-only ${{ github.event.before }} ${{ github.event.after }}
-          echo "-------------------------"
-          # --- END DIAGNOSTIC STEP ---
-
-          # Original command
-          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
+          # --- FINAL FIX (NEW) ---
+          # 1. Get changed files from git diff
+          # 2. Pipe to 'sed "s/\"//g"' to REMOVE quotes (") from the path
+          # 3. Pipe to 'grep' to find the matching file
+          # -------------------------
+          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | sed 's/"//g' | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
             echo "::error::No matching file found in changes between commits."
@@ -47,6 +45,7 @@ jobs:
       - name: Read newsletter file
         id: newsletter
         run: |
+          # Read the content using the dynamic file path (${...}) found in step 2.
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
 
           # Escape special characters for Slack JSON.
@@ -83,4 +82,5 @@ jobs:
               ]
             }
         env:
+          # Use the Webhook URL stored in Secrets.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
