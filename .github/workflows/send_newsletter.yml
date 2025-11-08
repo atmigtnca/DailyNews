@@ -5,33 +5,38 @@ on:
     branches:
       - main
     paths:
-      # Detect changes in all .md files within the '뉴스레터' folder (at root)
+      # All paths provided by the user
       - '뉴스레터/**.md'
-      # Detect changes in all .md files within the '프로덕트' folder (at root)
       - '프로덕트/**.md'
+      - '논문/**.md'
 
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
       # 1. Check out the repository code.
+      #    Must use 'fetch-depth: 0' (full clone) to ensure
+      #    the 'before' and 'after' commits are available for diff.
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 
+          fetch-depth: 0 
 
       # 2. Automatically find the path of the changed file from the last commit.
       - name: Find changed newsletter file
         id: find_file
         run: |
-          # Filters the list for .md files in our target paths ('뉴스레터' or '프로덕트')
-          CHANGED_FILE=$(git diff --name-only HEAD~1 HEAD | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md' | head -n 1)
+          echo "Comparing commits: ${{ github.event.before }} ... ${{ github.event.after }}"
+          
+          # UPDATED: Use the reliable GitHub event SHAs instead of 'HEAD~1'
+          # This correctly finds files from merge commits made by 'sync-fork'.
+          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
-            echo "::error::No newsletter file found in the last commit's changes."
+            echo "::error::No matching file found in changes between commits."
             exit 1 # Fail the workflow if no matching file is found.
           fi
-
+          
           echo "Found file: $CHANGED_FILE"
           # Set the found file path as an output variable for the next step.
           echo "::set-output name=filepath::$CHANGED_FILE"
@@ -46,7 +51,7 @@ jobs:
           # Escape special characters for Slack JSON.
           content="${content//'%'/'%25'}"
           content="${content//$'\n'/'\\n'}"
-          content="${content//$'\r'/'\\r'}"
+          content="${content//$'\r/'\\r'}"
           echo "::set-output name=content::$content"
 
       # 4. Send to Slack.
