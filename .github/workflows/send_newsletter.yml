@@ -5,7 +5,6 @@ on:
     branches:
       - main
     paths:
-      # All paths provided by the user
       - '뉴스레터/**.md'
       - '프로덕트/**.md'
       - '논문/**.md'
@@ -15,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 1. Check out the repository code.
-      #    Must use 'fetch-depth: 0' (full clone) to ensure
-      #    the 'before' and 'after' commits are available for diff.
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -28,8 +25,14 @@ jobs:
         run: |
           echo "Comparing commits: ${{ github.event.before }} ... ${{ github.event.after }}"
           
-          # UPDATED: Use the reliable GitHub event SHAs instead of 'HEAD~1'
-          # This correctly finds files from merge commits made by 'sync-fork'.
+          # --- DIAGNOSTIC STEP (NEW) ---
+          # Print ALL changed files to the log BEFORE filtering
+          echo "--- All changed files ---"
+          git diff --name-only ${{ github.event.before }} ${{ github.event.after }}
+          echo "-------------------------"
+          # --- END DIAGNOSTIC STEP ---
+
+          # Original command
           CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
@@ -38,19 +41,17 @@ jobs:
           fi
           
           echo "Found file: $CHANGED_FILE"
-          # Set the found file path as an output variable for the next step.
           echo "::set-output name=filepath::$CHANGED_FILE"
 
       # 3. Read the content of the file found above and save it as a variable.
       - name: Read newsletter file
         id: newsletter
         run: |
-          # Read the content using the dynamic file path (${...}) found in step 2.
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
 
           # Escape special characters for Slack JSON.
           content="${content//'%'/'%25'}"
-          content="${content//$'\n'/'\\n'}"
+          content="${content//$'\n/'\\n'}"
           content="${content//$'\r/'\\r'}"
           echo "::set-output name=content::$content"
 
@@ -82,5 +83,4 @@ jobs:
               ]
             }
         env:
-          # Use the Webhook URL stored in Secrets.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
