@@ -27,11 +27,12 @@ jobs:
           echo "Comparing commits: ${{ github.event.before }} ... ${{ github.event.after }}"
           
           # --- FINAL FIX (NEW) ---
-          # 1. Get changed files from git diff
-          # 2. Pipe to 'sed "s/\"//g"' to REMOVE quotes (") from the path
-          # 3. Pipe to 'grep' to find the matching file
-          # -------------------------
-          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | sed 's/"//g' | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
+          # Force git to output UTF-8 (Korean) paths correctly, not as octal escapes.
+          git config --global core.quotepath false
+          
+          # Now, git diff will output plain '논문/...' which grep can find.
+          # Removed the incorrect 'sed' command.
+          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
             echo "::error::No matching file found in changes between commits."
@@ -52,7 +53,7 @@ jobs:
           content="${content//'%'/'%25'}"
           content="${content//$'\n/'\\n'}"
           content="${content//$'\r/'\\r'}"
-          echo "::set-output name=content::$content"
+          echo "::set-output name=content::$CHANGED_FILE"
 
       # 4. Send to Slack.
       - name: Send to Slack
