@@ -65,14 +65,19 @@ jobs:
         run: |
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
           
-          # Escape special characters for Slack JSON
+          # --- FINAL FIX (JSON Escaping) ---
+          # Escape ALL characters that break JSON:
+          # 1. Backslashes (must be first!)
+          # 2. Double quotes
+          # 3. Newlines
+          # 4. Carriage returns
+          content="${content//'\'/'\\'}"
+          content="${content//'"'/'\"'}"
           content="${content//'%'/'%25'}"
-          content="${content//$'\n/'\\n'}"
+          content="${content//$'\n'/'\\n'}"
           content="${content//$'\r/'\\r'}"
           
-          # --- FINAL FIX (NEW) ---
-          # Use EOF syntax for multiline strings in GITHUB_OUTPUT
-          # This prevents the "Invalid format" error.
+          # Use EOF syntax for multiline strings
           echo "content<<EOF" >> $GITHUB_OUTPUT
           echo "$content" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
