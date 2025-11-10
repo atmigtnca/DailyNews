@@ -20,54 +20,73 @@ jobs:
         with:
           fetch-depth: 0 
 
-      # 2. Automatically find the path of the changed file from the last commit.
+      # 2. Automatically find the path of the changed file.
       - name: Find changed newsletter file
         id: find_file
         run: |
-          echo "Comparing commits: ${{ github.event.before }} ... ${{ github.event.after }}"
-          
-          # --- FINAL FIX (NEW) ---
-          # Force git to output UTF-8 (Korean) paths correctly, not as octal escapes.
+          # Force git to output UTF-8 (Korean) paths correctly
           git config --global core.quotepath false
           
-          # Now, git diff will output plain '논문/...' which grep can find.
-          # Removed the incorrect 'sed' command.
+          # Find the changed file using the reliable commit SHAs
           CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
 
           if [ -z "$CHANGED_FILE" ]; then
             echo "::error::No matching file found in changes between commits."
-            exit 1 # Fail the workflow if no matching file is found.
+            exit 1
           fi
           
           echo "Found file: $CHANGED_FILE"
-          echo "::set-output name=filepath::$CHANGED_FILE"
+          # Use modern GITHUB_OUTPUT to set the variable
+          echo "filepath=$CHANGED_FILE" >> $GITHUB_OUTPUT
 
-      # 3. Read the content of the file found above and save it as a variable.
+      # --- 3. (NEW) Set custom message based on file path ---
+      - name: Set Custom Slack Message
+        id: set_message
+        run: |
+          FILEPATH="${{ steps.find_file.outputs.filepath }}"
+          # Get current date in KST (e.g., "11월 10일")
+          TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
+          MSG_HEADER=""
+
+          if [[ "$FILEPATH" == 뉴스레터* ]]; then
+            MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
+          elif [[ "$FILEPATH" == 프로덕트* ]]; then
+            MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
+          elif [[ "$FILEPATH" == 논문* ]]; then
+            MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
+          else
+            MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
+          fi
+          
+          echo "Slack Title: $MSG_HEADER"
+          echo "title=$MSG_HEADER" >> $GITHUB_OUTPUT
+
+      # 4. Read the content of the file found above.
       - name: Read newsletter file
         id: newsletter
         run: |
-          # Read the content using the dynamic file path (${...}) found in step 2.
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
-
-          # Escape special characters for Slack JSON.
           content="${content//'%'/'%25'}"
           content="${content//$'\n/'\\n'}"
           content="${content//$'\r/'\\r'}"
-          echo "::set-output name=content::$CHANGED_FILE"
+          echo "content=$content" >> $GITHUB_OUTPUT
 
-      # 4. Send to Slack.
+      # 5. Send to Slack.
       - name: Send to Slack
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
             {
-              "text": "새 소식(${_ steps.find_file.outputs.filepath }})이 도착했습니다! 🚀",
+              # --- UPDATED ---
+              # Use the new custom message from step 3
+              "text": "${{ steps.set_message.outputs.title }}",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    "text": "📰 새 소식 (${_ steps.find_file.outputs.filepath }})"
+                    # Use the new custom message from step 3
+                    "text": "📰 ${{ steps.set_message.outputs.title }}"
                   }
                 },
                 {
@@ -77,11 +96,10 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${_ steps.newsletter.outputs.content }}"
+                    "text": "${{ steps.newsletter.outputs.content }}"
                   }
                 }
               ]
             }
         env:
-          # Use the Webhook URL stored in Secrets.
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
