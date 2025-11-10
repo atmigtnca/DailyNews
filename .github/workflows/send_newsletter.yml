@@ -14,13 +14,13 @@ jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. Check out the repository code.
+      # 1. Check out the repository code. (OK)
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 
 
-      # 2. Automatically find the path of the changed file.
+      # 2. Automatically find the path of the changed file. (OK)
       - name: Find changed newsletter file
         id: find_file
         run: |
@@ -36,15 +36,13 @@ jobs:
           fi
           
           echo "Found file: $CHANGED_FILE"
-          # Use modern GITHUB_OUTPUT to set the variable
           echo "filepath=$CHANGED_FILE" >> $GITHUB_OUTPUT
 
-      # --- 3. (NEW) Set custom message based on file path ---
+      # 3. Set custom message based on file path. (OK)
       - name: Set Custom Slack Message
         id: set_message
         run: |
           FILEPATH="${{ steps.find_file.outputs.filepath }}"
-          # Get current date in KST (e.g., "11월 10일")
           TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
           MSG_HEADER=""
 
@@ -66,26 +64,31 @@ jobs:
         id: newsletter
         run: |
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
+          
+          # Escape special characters for Slack JSON
           content="${content//'%'/'%25'}"
           content="${content//$'\n/'\\n'}"
           content="${content//$'\r/'\\r'}"
-          echo "content=$content" >> $GITHUB_OUTPUT
+          
+          # --- FINAL FIX (NEW) ---
+          # Use EOF syntax for multiline strings in GITHUB_OUTPUT
+          # This prevents the "Invalid format" error.
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$content" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      # 5. Send to Slack.
+      # 5. Send to Slack. (OK)
       - name: Send to Slack
         uses: slackapi/slack-github-action@v1.24.0
         with:
           payload: |
             {
-              # --- UPDATED ---
-              # Use the new custom message from step 3
               "text": "${{ steps.set_message.outputs.title }}",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    # Use the new custom message from step 3
                     "text": "📰 ${{ steps.set_message.outputs.title }}"
                   }
                 },
