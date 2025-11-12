@@ -65,19 +65,22 @@ jobs:
         run: |
           content=$(cat "${{ steps.find_file.outputs.filepath }}")
           
-          # --- FINAL FIX (JSON Escaping) ---
+          # --- FINAL FIX (Correct Bash Escaping Syntax) ---
           # Escape ALL characters that break JSON:
-          # 1. Backslashes (must be first!)
-          # 2. Double quotes
-          # 3. Newlines
-          # 4. Carriage returns
-          content="${content//'\'/'\\'}"
-          content="${content//'"'/'\"'}"
-          content="${content//'%'/'%25'}"
-          content="${content//$'\n'/'\\n'}"
-          content="${content//$'\r/'\\r'}"
           
-          # Use EOF syntax for multiline strings
+          # 1. Backslashes (must be first!)
+          content="${content//\\/\\\\}"
+          # 2. Double quotes
+          content="${content//\"/\\\"}"
+          # 3. Newlines
+          content="${content//$'\n'/\\n}"
+          # 4. Carriage returns
+          content="${content//$'\r'/\\r}"
+          
+          # (Percentage is not a JSON special char, but fine to keep)
+          content="${content//'%'/'%25'}" 
+          
+          # Use EOF syntax to safely pass the (now single-line) escaped string
           echo "content<<EOF" >> $GITHUB_OUTPUT
           echo "$content" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
