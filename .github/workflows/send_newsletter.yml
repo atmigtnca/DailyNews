@@ -77,9 +77,6 @@ jobs:
           # 4. Carriage returns
           content="${content//$'\r'/\\r}"
           
-          # (Percentage is not a JSON special char, but fine to keep)
-          content="${content//'%'/'%25'}" 
-          
           # Use EOF syntax to safely pass the (now single-line) escaped string
           echo "content<<EOF" >> $GITHUB_OUTPUT
           echo "$content" >> $GITHUB_OUTPUT
