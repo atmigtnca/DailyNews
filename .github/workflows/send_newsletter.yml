@@ -22,12 +22,12 @@ jobs:
 
       # 2. Find ALL changed newsletter files (OK)
       - name: Find changed newsletter files
-        id: find_files # Step ID changed to plural
+        id: find_files
         run: |
           # Force git to output UTF-8 (Korean) paths correctly
           git config --global core.quotepath false
           
-          # Get ALL matching files (Removed head -n 1)
+          # Get ALL matching files, not just the first one
           CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md')
 
           if [ -z "$CHANGED_FILES" ]; then
@@ -36,93 +36,14 @@ jobs:
           else
             echo "Found files:"
             echo "$CHANGED_FILES"
-            # Save the multi-line list of files
             echo "files_found=true" >> $GITHUB_OUTPUT
             echo "file_list<<EOF" >> $GITHUB_OUTPUT
             echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      # 3. (NEW) Loop over files and send Slack messages
-      #    This step replaces Set Message, Read File, and Send to Slack
+      # 3. (FINAL) Loop, Dynamically Truncate, and Send
       - name: Loop and Send to Slack
-        # Only run if Step 2 actually found files
         if: steps.find_files.outputs.files_found == 'true'
         run: |
-          # Get the list of files from the previous step's output
           FILE_LIST="${{ steps.find_files.outputs.file_list }}"
-          
-          # Get today's date
-          TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
-          
-          # Loop over each line in the FILE_LIST variable
-          while IFS= read -r FILEPATH; do
-            if [ -z "$FILEPATH" ]; then
-              continue # Skip empty lines
-            fi
-
-            echo "Processing file: $FILEPATH"
-
-            # --- 3a. Set Custom Slack Message ---
-            MSG_HEADER=""
-            if [[ "$FILEPATH" == 뉴스레터* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 프로덕트* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 논문* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
-            else
-              MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
-            fi
-
-            # --- 3b. Read, TRUNCATE, and escape file content ---
-            # Read the file
-            content=$(cat "$FILEPATH")
-            
-            # (NEW) Truncate to 2900 bytes (to be safe under 3000 chars)
-            # This solves the Slack character limit error
-            content=$(echo "$content" | head -c 2900)
-            content="$content... (내용이 너무 길어 잘렸습니다)"
-
-            # (OK) Escape for JSON
-            content="${content//\\/\\\\}"
-            content="${content//\"/\\\"}"
-            content="${content//$'\n'/\\n}"
-            content="${content//$'\r'/\\r}"
-
-            # --- 3c. Send to Slack (using curl) ---
-            # Create the JSON payload dynamically
-            SLACK_JSON=$(cat <<EOF
-            {
-              "text": "$MSG_HEADER",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "📰 $MSG_HEADER"
-                  }
-                },
-                {
-                  "type": "divider"
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "$content"
-                  }
-                }
-              ]
-            }
-EOF
-            )
-
-            # Send the payload using curl
-            curl -X POST -H 'Content-type: application/json' \
-            --data "$SLACK_JSON" \
-            "${{ secrets.SLACK_WEBHOOK_URL }}"
-            
-            echo "Sent message for $FILEPATH"
-            
-          done <<< "$FILE_LIST"
