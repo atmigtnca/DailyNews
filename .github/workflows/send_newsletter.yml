@@ -20,94 +20,89 @@ jobs:
         with:
           fetch-depth: 0 
 
-      # 2. Automatically find the path of the changed file. (OK)
-      - name: Find changed newsletter file
-        id: find_file
+      # 2. Find ALL changed newsletter files (OK)
+      - name: Find changed newsletter files
+        id: find_files
         run: |
           # Force git to output UTF-8 (Korean) paths correctly
           git config --global core.quotepath false
           
-          # Find the changed file using the reliable commit SHAs
-          CHANGED_FILE=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' | head -n 1)
+          # Get ALL matching files, not just the first one
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md')
 
-          if [ -z "$CHANGED_FILE" ]; then
-            echo "::error::No matching file found in changes between commits."
-            exit 1
-          fi
-          
-          echo "Found file: $CHANGED_FILE"
-          echo "filepath=$CHANGED_FILE" >> $GITHUB_OUTPUT
-
-      # 3. Set custom message based on file path. (OK)
-      - name: Set Custom Slack Message
-        id: set_message
-        run: |
-          FILEPATH="${{ steps.find_file.outputs.filepath }}"
-          TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
-          MSG_HEADER=""
-
-          if [[ "$FILEPATH" == 뉴스레터* ]]; then
-            MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
-          elif [[ "$FILEPATH" == 프로덕트* ]]; then
-            MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
-          elif [[ "$FILEPATH" == 논문* ]]; then
-            MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No matching files found."
+            echo "files_found=false" >> $GITHUB_OUTPUT
           else
-            MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
+            echo "Found files:"
+            echo "$CHANGED_FILES"
+            echo "files_found=true" >> $GITHUB_OUTPUT
+            echo "file_list<<EOF" >> $GITHUB_OUTPUT
+            echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
-          
-          echo "Slack Title: $MSG_HEADER"
-          echo "title=$MSG_HEADER" >> $GITHUB_OUTPUT
 
-      # 4. Read the content of the file found above.
-      - name: Read newsletter file
-        id: newsletter
+      # 3. (FINAL) Loop, Dynamically Truncate, and Send
+      - name: Loop and Send to Slack
+        if: steps.find_files.outputs.files_found == 'true'
         run: |
-          content=$(cat "${{ steps.find_file.outputs.filepath }}")
+          FILE_LIST="${{ steps.find_files.outputs.file_list }}"
+          TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
           
-          # --- FINAL FIX (Correct Bash Escaping Syntax) ---
-          # Escape ALL characters that break JSON:
-          
-          # 1. Backslashes (must be first!)
-          content="${content//\\/\\\\}"
-          # 2. Double quotes
-          content="${content//\"/\\\"}"
-          # 3. Newlines
-          content="${content//$'\n'/\\n}"
-          # 4. Carriage returns
-          content="${content//$'\r'/\\r}"
-          
-          # Use EOF syntax to safely pass the (now single-line) escaped string
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "$content" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          while IFS= read -r FILEPATH; do
+            if [ -z "$FILEPATH" ]; then
+              continue
+            fi
 
-      # 5. Send to Slack. (OK)
-      - name: Send to Slack
-        uses: slackapi/slack-github-action@v1.24.0
-        with:
-          payload: |
+            echo "Processing file: $FILEPATH"
+            
+            # --- 3a. Set Custom Slack Message (OK) ---
+            MSG_HEADER=""
+            if [[ "$FILEPATH" == 뉴스레터* ]]; then
+              MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
+            elif [[ "$FILEPATH" == 프로덕트* ]]; then
+              MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
+            elif [[ "$FILEPATH" == 논문* ]]; then
+              MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
+            else
+              MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
+            fi
+
+            # --- 3b. (NEW) Dynamically Read & Truncate Content ---
+            # This awk script dynamically adds items (separated by ---)
+            # until the total length exceeds a 2800 char safety limit.
+            # It handles all file types (뉴스레터, 프로덕트, 논문) at once.
+            content=$(awk 'BEGIN{RS="---"; ORS="---"; total_len=0; limit=2800} { item_len = length($0 ORS); if (NR == 1 && item_len > limit) { print substr($0, 1, limit) "...(항목이 너무 길어 잘렸습니다)"; exit; } if (total_len + item_len > limit) { exit; } print; total_len += item_len; }' "$FILEPATH")
+
+            # --- 3c. Escape for JSON (OK) ---
+            content="${content//\\/\\\\}"
+            content="${content//\"/\\\"}"
+            content="${content//$'\n'/\\n}"
+            content="${content//$'\r'/\\r}"
+
+            # --- 3d. Send to Slack (using curl) (OK) ---
+            SLACK_JSON=$(cat <<EOF
             {
-              "text": "${{ steps.set_message.outputs.title }}",
+              "text": "$MSG_HEADER",
               "blocks": [
                 {
                   "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "📰 ${{ steps.set_message.outputs.title }}"
-                  }
+                  "text": { "type": "plain_text", "text": "📰 $MSG_HEADER" }
                 },
-                {
-                  "type": "divider"
-                },
+                { "type": "divider" },
                 {
                   "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "${{ steps.newsletter.outputs.content }}"
-                  }
+                  "text": { "type": "mrkdwn", "text": "$content" }
                 }
               ]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+EOF
+            )
+
+            curl -X POST -H 'Content-type: application/json' \
+            --data "$SLACK_JSON" \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+            
+            echo "Sent message for $FILEPATH"
+            
+          done <<< "$FILE_LIST"
