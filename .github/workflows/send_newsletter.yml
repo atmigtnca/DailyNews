@@ -22,12 +22,12 @@ jobs:
 
       # 2. Find ALL changed newsletter files (OK)
       - name: Find changed newsletter files
-        id: find_files
+        id: find_files # Step ID changed to plural
         run: |
           # Force git to output UTF-8 (Korean) paths correctly
           git config --global core.quotepath false
           
-          # Get ALL matching files, not just the first one
+          # Get ALL matching files (Removed head -n 1)
           CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md')
 
           if [ -z "$CHANGED_FILES" ]; then
@@ -36,27 +36,34 @@ jobs:
           else
             echo "Found files:"
             echo "$CHANGED_FILES"
+            # Save the multi-line list of files
             echo "files_found=true" >> $GITHUB_OUTPUT
             echo "file_list<<EOF" >> $GITHUB_OUTPUT
             echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      # 3. (FINAL) Loop, Dynamically Truncate, and Send
+      # 3. (NEW) Loop over files and send Slack messages
+      #    This step replaces Set Message, Read File, and Send to Slack
       - name: Loop and Send to Slack
+        # Only run if Step 2 actually found files
         if: steps.find_files.outputs.files_found == 'true'
         run: |
+          # Get the list of files from the previous step's output
           FILE_LIST="${{ steps.find_files.outputs.file_list }}"
+          
+          # Get today's date
           TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
           
+          # Loop over each line in the FILE_LIST variable
           while IFS= read -r FILEPATH; do
             if [ -z "$FILEPATH" ]; then
-              continue
+              continue # Skip empty lines
             fi
 
             echo "Processing file: $FILEPATH"
-            
-            # --- 3a. Set Custom Slack Message (OK) ---
+
+            # --- 3a. Set Custom Slack Message ---
             MSG_HEADER=""
             if [[ "$FILEPATH" == 뉴스레터* ]]; then
               MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
@@ -68,38 +75,53 @@ jobs:
               MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
             fi
 
-            # --- 3b. (OK) Dynamically Read & Truncate Content ---
-            content=$(awk 'BEGIN{RS="---"; ORS="---"; total_len=0; limit=2800} { item_len = length($0 ORS); if (NR == 1 && item_len > limit) { print substr($0, 1, limit) "...(항목이 너무 길어 잘렸습니다)"; exit; } if (total_len + item_len > limit) { exit; } print; total_len += item_len; }' "$FILEPATH")
+            # --- 3b. Read, TRUNCATE, and escape file content ---
+            # Read the file
+            content=$(cat "$FILEPATH")
+            
+            # (NEW) Truncate to 2900 bytes (to be safe under 3000 chars)
+            # This solves the Slack character limit error
+            content=$(echo "$content" | head -c 2900)
+            content="$content... (내용이 너무 길어 잘렸습니다)"
 
-            # --- 3c. Escape for JSON (OK) ---
+            # (OK) Escape for JSON
             content="${content//\\/\\\\}"
             content="${content//\"/\\\"}"
             content="${content//$'\n'/\\n}"
             content="${content//$'\r'/\\r}"
 
-            # --- 3d. Send to Slack (using curl) (OK) ---
+            # --- 3c. Send to Slack (using curl) ---
+            # Create the JSON payload dynamically
             SLACK_JSON=$(cat <<EOF
             {
               "text": "$MSG_HEADER",
               "blocks": [
                 {
                   "type": "header",
-                  "text": { "type": "plain_text", "text": "📰 $MSG_HEADER" }
+                  "text": {
+                    "type": "plain_text",
+                    "text": "📰 $MSG_HEADER"
+                  }
                 },
-                { "type": "divider" },
+                {
+                  "type": "divider"
+                },
                 {
                   "type": "section",
-                  "text": { "type": "mrkdwn", "text": "$content" }
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "$content"
+                  }
                 }
               ]
             }
 EOF
             )
 
-            # --- (YAML FIX) ---
-            # Changed the 'curl' command to be a single line
-            # to prevent any YAML parsing errors with line breaks.
-            curl -X POST -H 'Content-type: application/json' --data "$SLACK_JSON" "${{ secrets.SLACK_WEBHOOK_URL }}"
+            # Send the payload using curl
+            curl -X POST -H 'Content-type: application/json' \
+            --data "$SLACK_JSON" \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
             
             echo "Sent message for $FILEPATH"
             
