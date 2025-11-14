@@ -13,13 +13,13 @@ jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. Check out the repository code.
+      # 1. Check out the repository code. (OK)
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 
 
-      # 2. Find ALL changed newsletter files
+      # 2. Find ALL changed newsletter files (OK)
       - name: Find changed newsletter files
         id: find_files
         run: |
@@ -37,66 +37,15 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      # 3. (FINAL) Loop, Dynamically Truncate, and Send
-      - name: Loop and Send to Slack
+      # 3. (NEW) Run the external script to send Slack messages
+      - name: Send Slack Messages
         if: steps.find_files.outputs.files_found == 'true'
+        env:
+          # Pass secrets and variables to the script
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          FILE_LIST: ${{ steps.find_files.outputs.file_list }}
         run: |
-          # Exit immediately if any command fails
-          set -e
-          
-          FILE_LIST="${{ steps.find_files.outputs.file_list }}"
-          TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
-          
-          while IFS= read -r FILEPATH; do
-            if [ -z "$FILEPATH" ]; then
-              continue
-            fi
-            echo "Processing file: $FILEPATH"
-            
-            # --- 3a. Set Custom Slack Message ---
-            MSG_HEADER=""
-            if [[ "$FILEPATH" == 뉴스레터* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 프로덕트* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 논문* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
-            else
-              MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
-            fi
-
-            # --- 3b. Dynamically Read & Truncate Content ---
-            content=$(awk 'BEGIN{RS="---"; ORS="---"; total_len=0; limit=2800} { item_len = length($0 ORS); if (NR == 1 && item_len > limit) { print substr($0, 1, limit) "...(항목이 너무 길어 잘렸습니다)"; exit; } if (total_len + item_len > limit) { exit; } print; total_len += item_len; }' "$FILEPATH")
-
-            # --- 3c. Escape for JSON ---
-            content="${content//\\/\\\\}"
-            content="${content//\"/\\\"}"
-            content="${content//$'\n'/\\n}"
-            content="${content//$'\r'/\\r}"
-
-            # --- 3d. Send to Slack (using curl) ---
-            SLACK_JSON=$(cat <<-EOF
-            {
-              "text": "$MSG_HEADER",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": { "type": "plain_text", "text": "📰 $MSG_HEADER" }
-                },
-                { "type": "divider" },
-                {
-                  "type": "section",
-                  "text": { "type": "mrkdwn", "text": "$content" }
-                }
-              ]
-            }
-EOF
-            )
-
-            # (YAML FIX) curl command as a single line
-            # Added --fail to catch HTTP errors
-            curl --fail -X POST -H 'Content-type: application/json' --data "$SLACK_JSON" "${{ secrets.SLACK_WEBHOOK_URL }}"
-            
-            echo "Sent message for $FILEPATH"
-            
-          done <<< "$FILE_LIST"
+          # Make the new script executable
+          chmod +x .github/scripts/send_slack.sh
+          # Run the script
+          bash .github/scripts/send_slack.sh
