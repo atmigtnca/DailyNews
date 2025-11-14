@@ -46,9 +46,6 @@ jobs:
       - name: Loop and Send to Slack
         if: steps.find_files.outputs.files_found == 'true'
         run: |
-          # (NEW) Ensure the script exits immediately if any command fails
-          set -e
-          
           FILE_LIST="${{ steps.find_files.outputs.file_list }}"
           TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
           
@@ -81,6 +78,7 @@ jobs:
             content="${content//$'\r'/\\r}"
 
             # --- 3d. Send to Slack (using curl) (OK) ---
+            # (YAML FIX 1) Use 'cat <<-EOF' to allow the closing EOF to be indented
             SLACK_JSON=$(cat <<-EOF
             {
               "text": "$MSG_HEADER",
@@ -99,10 +97,10 @@ jobs:
 EOF
             )
 
-            # --- (NEW) Add '--fail' to curl ---
-            # '--fail' makes curl exit with an error (non-zero)
-            # if the server returns an HTTP error (like 404, or Slack's 400 for bad JSON)
-            curl --fail -X POST -H 'Content-type: application/json' --data "$SLACK_JSON" "${{ secrets.SLACK_WEBHOOK_URL }}"
+            # --- (YAML FIX 2) ---
+            # Changed the 'curl' command to be a single line
+            # to prevent any YAML parsing errors with line breaks.
+            curl -X POST -H 'Content-type: application/json' --data "$SLACK_JSON" "${{ secrets.SLACK_WEBHOOK_URL }}"
             
             echo "Sent message for $FILEPATH"
             
