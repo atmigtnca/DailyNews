@@ -5,7 +5,6 @@ on:
     branches:
       - main
     paths:
-      # All paths provided by the user
       - '뉴스레터/**.md'
       - '프로덕트/**.md'
       - '논문/**.md'
@@ -14,22 +13,18 @@ jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. Check out the repository code. (OK)
+      # 1. Check out the repository code.
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 
 
-      # 2. Find ALL changed newsletter files (OK)
+      # 2. Find ALL changed newsletter files
       - name: Find changed newsletter files
         id: find_files
         run: |
-          # Force git to output UTF-8 (Korean) paths correctly
           git config --global core.quotepath false
-          
-          # Get ALL matching files, not just the first one
           CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md')
-
           if [ -z "$CHANGED_FILES" ]; then
             echo "No matching files found."
             echo "files_found=false" >> $GITHUB_OUTPUT
@@ -46,6 +41,9 @@ jobs:
       - name: Loop and Send to Slack
         if: steps.find_files.outputs.files_found == 'true'
         run: |
+          # Exit immediately if any command fails
+          set -e
+          
           FILE_LIST="${{ steps.find_files.outputs.file_list }}"
           TODAY_KST=$(TZ="Asia/Seoul" date '+%-m월 %-d일')
           
@@ -53,55 +51,10 @@ jobs:
             if [ -z "$FILEPATH" ]; then
               continue
             fi
-
             echo "Processing file: $FILEPATH"
             
-            # --- 3a. Set Custom Slack Message (OK) ---
+            # --- 3a. Set Custom Slack Message ---
             MSG_HEADER=""
             if [[ "$FILEPATH" == 뉴스레터* ]]; then
               MSG_HEADER="$TODAY_KST 오늘의 뉴스레터가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 프로덕트* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 프로덕트가 도착했습니다! 🚀"
-            elif [[ "$FILEPATH" == 논문* ]]; then
-              MSG_HEADER="$TODAY_KST 오늘의 논문이 도착했습니다! 🚀"
-            else
-              MSG_HEADER="$TODAY_KST 새 소식($FILEPATH)이 도착했습니다! 🚀"
-            fi
-
-            # --- 3b. (OK) Dynamically Read & Truncate Content ---
-            content=$(awk 'BEGIN{RS="---"; ORS="---"; total_len=0; limit=2800} { item_len = length($0 ORS); if (NR == 1 && item_len > limit) { print substr($0, 1, limit) "...(항목이 너무 길어 잘렸습니다)"; exit; } if (total_len + item_len > limit) { exit; } print; total_len += item_len; }' "$FILEPATH")
-
-            # --- 3c. Escape for JSON (OK) ---
-            content="${content//\\/\\\\}"
-            content="${content//\"/\\\"}"
-            content="${content//$'\n'/\\n}"
-            content="${content//$'\r'/\\r}"
-
-            # --- 3d. Send to Slack (using curl) (OK) ---
-            # (YAML FIX 1) Use 'cat <<-EOF' to allow the closing EOF to be indented
-            SLACK_JSON=$(cat <<-EOF
-            {
-              "text": "$MSG_HEADER",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": { "type": "plain_text", "text": "📰 $MSG_HEADER" }
-                },
-                { "type": "divider" },
-                {
-                  "type": "section",
-                  "text": { "type": "mrkdwn", "text": "$content" }
-                }
-              ]
-            }
-EOF
-            )
-
-            # --- (YAML FIX 2) ---
-            # Changed the 'curl' command to be a single line
-            # to prevent any YAML parsing errors with line breaks.
-            curl -X POST -H 'Content-type: application/json' --data "$SLACK_JSON" "${{ secrets.SLACK_WEBHOOK_URL }}"
-            
-            echo "Sent message for $FILEPATH"
-            
-          done <<< "$FILE_LIST"
+            elif [[ "$FILEPATH" == 프로덕
