@@ -13,18 +13,17 @@ jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. Check out the repository code. (OK)
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
-      # 2. Find ALL changed newsletter files (OK)
       - name: Find changed newsletter files
         id: find_files
         run: |
           git config --global core.quotepath false
           CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' || true)
+          
           if [ -z "$CHANGED_FILES" ]; then
             echo "No matching files found."
             echo "files_found=false" >> $GITHUB_OUTPUT
@@ -37,15 +36,11 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
-      # 3. (NEW) Run the external script to send Slack messages
-      - name: Send Slack Messages
+      - name: Run Send Script
         if: steps.find_files.outputs.files_found == 'true'
         env:
-          # Pass secrets and variables to the script
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FILE_LIST: ${{ steps.find_files.outputs.file_list }}
         run: |
-          # Make the new script executable
           chmod +x .github/scripts/send_slack.sh
-          # Run the script
-          bash .github/scripts/send_slack.sh
+          .github/scripts/send_slack.sh
