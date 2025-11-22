@@ -13,11 +13,13 @@ jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
+      # 1. 코드 가져오기
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 2. 변경된 파일 찾기
       - name: Find changed newsletter files
         id: find_files
         run: |
@@ -36,11 +38,22 @@ jobs:
             echo "EOF" >> $GITHUB_OUTPUT
           fi
 
+      # 3. 스크립트 실행 (디버깅 및 수정 코드 추가됨)
       - name: Run Send Script
         if: steps.find_files.outputs.files_found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           FILE_LIST: ${{ steps.find_files.outputs.file_list }}
         run: |
+          echo "=== 파일 위치 확인 ==="
+          ls -R .github
+          echo "======================"
+
+          # 파일 실행 권한 부여
           chmod +x .github/scripts/send_slack.sh
-          .github/scripts/send_slack.sh
+          
+          # (핵심) 윈도우식 줄바꿈(\r)을 강제로 제거 (오류 해결의 열쇠)
+          sed -i 's/\r$//' .github/scripts/send_slack.sh
+          
+          # 스크립트 실행
+          bash .github/scripts/send_slack.sh
