@@ -1,59 +1,76 @@
-name: Send Newsletter to Slack
+name: Send Newsletter
 
 on:
   push:
-    branches:
-      - main
     paths:
-      - '뉴스레터/**.md'
-      - '프로덕트/**.md'
-      - '논문/**.md'
+      - '뉴스레터/**'
+      - '프로덕트/**'
+      - '논문/**'
+  workflow_dispatch:
 
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
     steps:
-      # 1. 코드 가져오기
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. 변경된 파일 찾기
-      - name: Find changed newsletter files
-        id: find_files
+      # 1. 파이썬 환경 설정 (새로 추가됨)
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 2. 필수 라이브러리 설치 (새로 추가됨)
+      - name: Install dependencies
+        run: pip install requests
+
+      # 3. 변경된 파일 찾기
+      - name: Find changed files
+        id: check_files
         run: |
           git config --global core.quotepath false
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' || true)
           
+          # Push 이벤트일 경우 변경된 파일 확인
+          if [ "${{ github.event_name }}" == "push" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' || true)
+          else
+            # 수동 실행(workflow_dispatch)일 경우 가장 최근 파일 선택
+            CHANGED_FILES=$(find 뉴스레터 -name "*.md" | sort -r | head -n 1)
+          fi
+
           if [ -z "$CHANGED_FILES" ]; then
             echo "No matching files found."
             echo "files_found=false" >> $GITHUB_OUTPUT
           else
-            echo "Found files:"
-            echo "$CHANGED_FILES"
+            echo "Found files: $CHANGED_FILES"
             echo "files_found=true" >> $GITHUB_OUTPUT
-            echo "file_list<<EOF" >> $GITHUB_OUTPUT
-            echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            
+            # 여러 개일 경우 첫 번째 파일만 처리
+            TARGET_FILE=$(echo "$CHANGED_FILES" | head -n 1)
+            echo "target_file=$TARGET_FILE" >> $GITHUB_OUTPUT
           fi
 
-      # 3. 스크립트 실행 (디버깅 및 수정 코드 추가됨)
-      - name: Run Send Script
-        if: steps.find_files.outputs.files_found == 'true'
+      # 4. 파일 내용 읽기
+      - name: Read Markdown Content
+        id: read_md
+        if: steps.check_files.outputs.files_found == 'true'
+        run: |
+          FILE_PATH="${{ steps.check_files.outputs.target_file }}"
+          
+          # 파일 내용을 환경변수로 내보내기 (Multiline 처리)
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          cat "$FILE_PATH" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 5. 슬랙 전송 (파이썬 스크립트 실행으로 변경됨)
+      - name: Send Slack with Images
+        if: steps.check_files.outputs.files_found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          FILE_LIST: ${{ steps.find_files.outputs.file_list }}
+          NEWSLETTER_CONTENT: ${{ steps.read_md.outputs.content }}
         run: |
-          echo "=== 파일 위치 확인 ==="
-          ls -R .github
-          echo "======================"
-
-          # 파일 실행 권한 부여
-          chmod +x .github/scripts/send_slack.sh
-          
-          # (핵심) 윈도우식 줄바꿈(\r)을 강제로 제거 (오류 해결의 열쇠)
-          sed -i 's/\r$//' .github/scripts/send_slack.sh
-          
-          # 스크립트 실행
-          bash .github/scripts/send_slack.sh
+          # 새로 만든 파이썬 스크립트 실행
+          python .github/scripts/send_formatted_slack.py
