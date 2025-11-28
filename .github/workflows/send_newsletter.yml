@@ -17,27 +17,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 1. 파이썬 환경 설정 (새로 추가됨)
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # 2. 필수 라이브러리 설치 (새로 추가됨)
       - name: Install dependencies
         run: pip install requests
 
-      # 3. 변경된 파일 찾기
       - name: Find changed files
         id: check_files
         run: |
           git config --global core.quotepath false
           
-          # Push 이벤트일 경우 변경된 파일 확인
           if [ "${{ github.event_name }}" == "push" ]; then
             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' || true)
           else
-            # 수동 실행(workflow_dispatch)일 경우 가장 최근 파일 선택
             CHANGED_FILES=$(find 뉴스레터 -name "*.md" | sort -r | head -n 1)
           fi
 
@@ -48,29 +43,18 @@ jobs:
             echo "Found files: $CHANGED_FILES"
             echo "files_found=true" >> $GITHUB_OUTPUT
             
-            # 여러 개일 경우 첫 번째 파일만 처리
             TARGET_FILE=$(echo "$CHANGED_FILES" | head -n 1)
             echo "target_file=$TARGET_FILE" >> $GITHUB_OUTPUT
           fi
 
-      # 4. 파일 내용 읽기
-      - name: Read Markdown Content
-        id: read_md
-        if: steps.check_files.outputs.files_found == 'true'
-        run: |
-          FILE_PATH="${{ steps.check_files.outputs.target_file }}"
-          
-          # 파일 내용을 환경변수로 내보내기 (Multiline 처리)
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          cat "$FILE_PATH" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+      # [삭제됨] Read Markdown Content 단계는 이제 필요 없습니다!
+      # Python이 직접 파일을 읽을 것이기 때문입니다.
 
-      # 5. 슬랙 전송 (파이썬 스크립트 실행으로 변경됨)
       - name: Send Slack with Images
         if: steps.check_files.outputs.files_found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          NEWSLETTER_CONTENT: ${{ steps.read_md.outputs.content }}
+          # 내용(CONTENT) 대신 파일 경로(FILE_PATH)를 넘깁니다
+          FILE_PATH: ${{ steps.check_files.outputs.target_file }}
         run: |
-          # 새로 만든 파이썬 스크립트 실행
           python .github/scripts/send_formatted_slack.py
