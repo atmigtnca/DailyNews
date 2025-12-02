@@ -30,31 +30,27 @@ jobs:
         run: |
           git config --global core.quotepath false
           
+          # Push 이벤트일 경우 커밋 내역에서 변경된 md 파일 찾기 (뉴스레터, 프로덕트, 논문 폴더)
           if [ "${{ github.event_name }}" == "push" ]; then
-            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '뉴스레터/.*\.md|프로덕트/.*\.md|논문/.*\.md' || true)
+             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^(뉴스레터|프로덕트|논문)/.*\.md$' | head -n 1 || true)
           else
-            CHANGED_FILES=$(find 뉴스레터 -name "*.md" | sort -r | head -n 1)
+             # 수동 실행(workflow_dispatch)일 경우 각 폴더에서 가장 최신 파일 하나 찾기
+             CHANGED_FILES=$(find 뉴스레터 프로덕트 논문 -name "*.md" 2>/dev/null | sort -r | head -n 1)
           fi
 
           if [ -z "$CHANGED_FILES" ]; then
             echo "No matching files found."
             echo "files_found=false" >> $GITHUB_OUTPUT
           else
-            echo "Found files: $CHANGED_FILES"
+            echo "Found file: $CHANGED_FILES"
             echo "files_found=true" >> $GITHUB_OUTPUT
-            
-            TARGET_FILE=$(echo "$CHANGED_FILES" | head -n 1)
-            echo "target_file=$TARGET_FILE" >> $GITHUB_OUTPUT
+            echo "target_file=$CHANGED_FILES" >> $GITHUB_OUTPUT
           fi
-
-      # [삭제됨] Read Markdown Content 단계는 이제 필요 없습니다!
-      # Python이 직접 파일을 읽을 것이기 때문입니다.
 
       - name: Send Slack with Images
         if: steps.check_files.outputs.files_found == 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          # 내용(CONTENT) 대신 파일 경로(FILE_PATH)를 넘깁니다
           FILE_PATH: ${{ steps.check_files.outputs.target_file }}
         run: |
           python .github/scripts/send_formatted_slack.py
