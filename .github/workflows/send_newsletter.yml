@@ -25,32 +25,48 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Find changed files
-        id: check_files
+      - name: Find changed files and Send Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           git config --global core.quotepath false
           
-          # Push 이벤트일 경우 커밋 내역에서 변경된 md 파일 찾기 (뉴스레터, 프로덕트, 논문 폴더)
+          echo "=== 1. 변경된 파일 감지 시작 ==="
+          
+          # Push 이벤트일 경우: 커밋 내역에서 변경된 모든 md 파일 찾기 (head -n 1 제거됨)
           if [ "${{ github.event_name }}" == "push" ]; then
-             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^(뉴스레터|프로덕트|논문)/.*\.md$' | head -n 1 || true)
+             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^(뉴스레터|프로덕트|논문)/.*\.md$' || true)
           else
-             # 수동 실행(workflow_dispatch)일 경우 각 폴더에서 가장 최신 파일 하나 찾기
-             CHANGED_FILES=$(find 뉴스레터 프로덕트 논문 -name "*.md" 2>/dev/null | sort -r | head -n 1)
+             # 수동 실행(workflow_dispatch)일 경우: 각 폴더별로 가장 최신 파일 하나씩 다 가져오기
+             # (뉴스레터 최신 1개 + 프로덕트 최신 1개 + 논문 최신 1개 = 최대 3개 전송)
+             FILE1=$(find 뉴스레터 -name "*.md" 2>/dev/null | sort -r | head -n 1)
+             FILE2=$(find 프로덕트 -name "*.md" 2>/dev/null | sort -r | head -n 1)
+             FILE3=$(find 논문 -name "*.md" 2>/dev/null | sort -r | head -n 1)
+             CHANGED_FILES="$FILE1 $FILE2 $FILE3"
           fi
 
-          if [ -z "$CHANGED_FILES" ]; then
+          # 변경된 파일이 하나도 없으면 종료
+          # (공백 제거 후 확인)
+          if [ -z "$(echo "$CHANGED_FILES" | tr -d '[:space:]')" ]; then
             echo "No matching files found."
-            echo "files_found=false" >> $GITHUB_OUTPUT
-          else
-            echo "Found file: $CHANGED_FILES"
-            echo "files_found=true" >> $GITHUB_OUTPUT
-            echo "target_file=$CHANGED_FILES" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-      - name: Send Slack with Images
-        if: steps.check_files.outputs.files_found == 'true'
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          FILE_PATH: ${{ steps.check_files.outputs.target_file }}
-        run: |
-          python .github/scripts/send_formatted_slack.py
+          echo "전송할 파일 목록:"
+          echo "$CHANGED_FILES"
+          echo "=================================="
+
+          # 3. 반복문(Loop): 찾은 파일 개수만큼 파이썬 스크립트 반복 실행
+          for FILE in $CHANGED_FILES; do
+            # 파일이 실제로 존재하고 비어있지 않은 문자열일 때만 실행
+            if [ -n "$FILE" ] && [ -f "$FILE" ]; then
+              echo "----------------------------------------"
+              echo "🚀 Sending file: $FILE"
+              
+              # 파이썬 스크립트에 현재 처리 중인 파일 경로를 환경변수로 넘김
+              export FILE_PATH="$FILE"
+              python .github/scripts/send_formatted_slack.py
+              
+              echo "✅ Done: $FILE"
+            fi
+          done
