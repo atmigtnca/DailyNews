@@ -34,25 +34,29 @@ current_text_buffer = ""
 
 def clean_markdown(text):
     """마크다운 문법을 슬랙용으로 변환"""
-    # 굵게: **text** -> *text*
-    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
-    # 링크: [text](url) -> <url|text>
-    text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<\2|\1>', text)
-    # 슬랙에서 금지된 빈 볼드체(**) 제거
-    text = text.replace("**", "")
+    text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text) # 굵게
+    text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<\2|\1>', text) # 링크
+    text = text.replace("**", "") # 빈 볼드 제거
     return text
 
+def is_valid_image_url(url):
+    """URL이 진짜 이미지 파일인지 확장자로 검사"""
+    if not url or not url.startswith('http'):
+        return False
+    # 이미지 확장자 리스트 (소문자로 변환 후 비교)
+    valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+    return any(url.lower().endswith(ext) for ext in valid_extensions)
+
 def flush_text_buffer():
-    """텍스트 버퍼를 블록으로 변환 (빈 블록 방지 로직 포함)"""
+    """텍스트 버퍼를 블록으로 변환"""
     global current_text_buffer, blocks
     
-    # 공백 제거 후 확인
     text = current_text_buffer.strip()
     if not text:
         current_text_buffer = ""
         return
 
-    LIMIT = 2900  # 슬랙 제한 3000자 안전 마진
+    LIMIT = 2900
     
     if len(text) <= LIMIT:
         blocks.append({
@@ -60,14 +64,12 @@ def flush_text_buffer():
             "text": {"type": "mrkdwn", "text": text}
         })
     else:
-        # 긴 텍스트 분할 처리
         while len(text) > LIMIT:
             split_index = text.rfind('\n', 0, LIMIT)
             if split_index == -1:
                 split_index = LIMIT
                 
             chunk = text[:split_index].strip()
-            # 분할된 조각이 비어있지 않을 때만 추가
             if chunk:
                 blocks.append({
                     "type": "section",
@@ -96,23 +98,24 @@ lines = md_content.split('\n')
 for line in lines:
     line = line.strip()
     
-    # 1. 이미지 발견
+    # 1. 이미지 패턴 발견 (![...](URL))
     img_match = re.search(r'!\[.*?\]\((.*?)\)', line)
     
     if img_match:
-        flush_text_buffer()
         image_url = img_match.group(1)
         
-        # [중요] 이미지 URL 유효성 검사 (http로 시작하고, 빈 값이 아닐 때만)
-        if image_url and image_url.startswith('http') and len(image_url) > 5:
+        # [핵심 수정] 진짜 이미지(.jpg, .png 등)일 때만 이미지 블록으로 만듦
+        if is_valid_image_url(image_url):
+            flush_text_buffer()
             blocks.append({
                 "type": "image",
                 "image_url": image_url,
                 "alt_text": "News Image"
             })
         else:
-            # 이미지가 깨졌거나 로컬 경로면 링크 텍스트로 대체 (에러 방지)
-            current_text_buffer += f" (이미지 링크: {image_url})\n"
+            # 이미지가 아니면(예: PDF 링크) 그냥 텍스트 링크로 변환해서 본문에 붙임
+            # 예: <https://arxiv.org/pdf/...|PDF 다운로드>
+            current_text_buffer += f"\n📄 <{image_url}|파일 보기>\n"
             
     # 2. 구분선
     elif line == '---':
@@ -124,13 +127,13 @@ for line in lines:
         if current_text_buffer: 
              flush_text_buffer()
         clean_line = clean_markdown(line.replace('#', '').strip())
-        if clean_line: # 제목이 비어있지 않을 때만
+        if clean_line:
             current_text_buffer += f"*{clean_line}*\n"
         
     # 4. 일반 텍스트
     elif line:
         cleaned = clean_markdown(line)
-        if cleaned: # 변환 후에도 내용이 있을 때만
+        if cleaned:
             current_text_buffer += cleaned + "\n"
 
 flush_text_buffer()
@@ -152,7 +155,6 @@ try:
     if response.status_code == 200:
         print("✅ Slack Message Sent Successfully!")
     else:
-        # [디버깅] 실패 시 어떤 블록이 문제인지 확인하기 위해 페이로드 출력
         print(f"❌ Slack Error: {response.text}")
         print("--- Sent Payload (Debugging) ---")
         print(json.dumps(payload, indent=2, ensure_ascii=False))
