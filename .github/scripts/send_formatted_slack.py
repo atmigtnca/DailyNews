@@ -54,26 +54,24 @@ def send_blocks(all_blocks):
 
 # --- 리포트 유효성 검사 ---
 # upstream 생성 파이프라인이 실패하면 실제 리포트 대신 LLM의 되묻는 응답이나
-# 오류 안내문이 그대로 커밋됨. 그런 파일은 본문 대신 짧은 알림만 전송한다.
+# 오류 안내문이 그대로 커밋됨. 그런 파일은 아무것도 보내지 않고 조용히 건너뜀.
 BROKEN_OPENINGS = [
     "죄송", "안녕하세요", "안내드립니다", "요청하신", "요청해주신",
     "요청 감사", "이미 여러", "알려주",
 ]
 
 def is_broken_report(content):
-    # LLM의 사과/되묻기 문구로 시작하면 깨진 리포트로 판단
     head = content.lstrip()[:30]
     if any(p in head for p in BROKEN_OPENINGS):
         return True
     # 정상 리포트는 항상 기사/논문 링크나 이미지를 포함함 (깨진 리포트는 전부 0개)
     return len(re.findall(r'\]\(http', content)) == 0
 
-# 깨진 리포트는 채널에 아무것도 보내지 않고 조용히 건너뜀 (로그로만 남김)
 if is_broken_report(md_content):
     print(f"⚠️ 깨진 리포트 감지({category}), Slack 전송 안 함 -> {file_path}")
     exit(0)
 
-# --- 마크다운 → Slack 블록 변환 ---
+# --- URL 헬퍼 ---
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
 
@@ -108,19 +106,12 @@ def clean_markdown(text):
     text = text.replace("**", "")
     return text
 
-blocks = [
-    {"type": "header", "text": {"type": "plain_text", "text": main_header, "emoji": True}},
-    {"type": "divider"},
-]
-current_text_buffer = ""
-bold_next_line = False  # "## 제목:" 처럼 제목이 다음 줄에 오는 경우
+def escape_mrkdwn(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-def flush_text_buffer():
-    global current_text_buffer
-    text = current_text_buffer.strip()
-    current_text_buffer = ""
-    if not text:
-        return
+def append_section(blocks, text):
+    # 3000자 블록 제한에 맞춰 문단 경계에서 분할
+    text = text.strip()
     LIMIT = 2900
     while len(text) > LIMIT:
         split_index = text.rfind('\n', 0, LIMIT)
@@ -133,75 +124,183 @@ def flush_text_buffer():
     if text:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
 
-for line in md_content.split('\n'):
-    line = line.strip()
+# --- 1차: 구조적 파싱 (제목/요약/쉬운설명/관련분야/중요도·추천수/링크) ---
 
-    # 리포트 뒤에 붙는 LLM 후속 안내문은 전송하지 않음
-    if line.startswith("다음 단계 제안"):
-        break
-    # "(주의: 아래 요약은 abstract 기반 초안…" 같은 면책 문구 제거
-    if line.startswith("(주의"):
-        continue
+FIELD_KEYS = ('요약', '쉬운설명', '관련분야', '중요도', '추천수', '전체링크', 'PDF 다운로드 링크')
 
-    img_match = re.search(r'!\[(.*?)\]\((.*?)\)', line)
+def parse_items(content):
+    items = []
+    for chunk in re.split(r'\n\s*---\s*\n', content):
+        fields = {}
+        images = []
+        file_url = None
+        current_key = None
+        for raw in chunk.split('\n'):
+            line = raw.strip()
+            if line.startswith("다음 단계 제안"):
+                break
+            if line.startswith("(주의"):
+                continue
 
-    if img_match:
-        alt_text, url = img_match.group(1).strip(), img_match.group(2).strip()
-        if is_usable_url(url) and is_image_url(url):
-            # 로드에 실패하는 이미지(서명 잘린 CDN URL 등)는 조용히 버림
-            if image_actually_loads(url):
-                flush_text_buffer()
-                blocks.append({
-                    "type": "image",
-                    "image_url": url,
-                    "alt_text": alt_text or "News Image",
-                })
-        elif is_usable_url(url):
-            # 이미지가 아닌 파일(예: arXiv PDF)은 텍스트 링크로
-            label = alt_text or "파일 보기"
-            current_text_buffer += f"📄 <{url}|{label}>\n"
-        # 잘린/깨진 URL은 표시할 방법이 없으므로 조용히 버림
+            # 이미지/파일 마크다운을 먼저 분리
+            img = re.search(r'!\[(.*?)\]\((.*?)\)', line)
+            if img:
+                url = img.group(2).strip()
+                if is_usable_url(url):
+                    if is_image_url(url):
+                        images.append(url)
+                    else:
+                        file_url = url
+                line = (line[:img.start()] + line[img.end():]).strip()
+            elif line.startswith('!['):
+                continue  # 닫는 괄호도 없이 잘린 이미지 → 버림
 
-    elif line.startswith('![') or line.startswith('https://scontent'):
-        # 닫는 괄호조차 없이 잘린 이미지 마크다운 → 버림 (생마크다운 노출 방지)
-        continue
+            heading = re.match(r'^#{1,6}\s*(.+?)\s*$', line)
+            if heading:
+                line = heading.group(1)
 
-    elif line == '---':
-        flush_text_buffer()
-        blocks.append({"type": "divider"})
+            key_match = re.match(
+                r'^\*?\*?(' + '|'.join(FIELD_KEYS) + r'|제목)\*?\*?\s*:\s*(.*)$', line)
+            if key_match:
+                current_key = key_match.group(1)
+                fields[current_key] = key_match.group(2).strip()
+            elif line and current_key:
+                fields[current_key] = (fields[current_key] + '\n' + line).strip()
+        if fields.get('제목') and fields.get('요약'):
+            items.append({'fields': fields, 'images': images, 'file_url': file_url})
+    return items
 
-    elif line.startswith('##'):
-        flush_text_buffer()
-        heading = clean_markdown(line.lstrip('#').strip())
-        # "제목: X" 헤딩은 접두어를 떼고 제목만 강조
-        if heading.startswith('제목:'):
-            heading = heading[len('제목:'):].strip()
-        if heading:
-            current_text_buffer += f"*{heading}*\n"
-        else:
-            bold_next_line = True
+def build_structured_blocks(items):
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": main_header, "emoji": True}},
+    ]
+    for i, item in enumerate(items, 1):
+        f = item['fields']
+        if i > 1:
+            blocks.append({"type": "divider"})
 
-    elif line:
-        cleaned = clean_markdown(line)
-        if cleaned:
-            if bold_next_line:
-                cleaned = f"*{cleaned}*"
-                bold_next_line = False
-            current_text_buffer += cleaned + "\n"
+        # 항목 대표 이미지 (실제 로드되는 경우에만)
+        if item['images'] and image_actually_loads(item['images'][0]):
+            blocks.append({
+                "type": "image",
+                "image_url": item['images'][0],
+                "alt_text": f['제목'][:100],
+            })
 
-flush_text_buffer()
+        # 제목: 원문 링크가 있으면 제목 자체를 링크로
+        title = escape_mrkdwn(re.sub(r'\s+', ' ', f['제목']))
+        link = None
+        for key in ('전체링크', 'PDF 다운로드 링크'):
+            m = re.search(r'https?://\S+', f.get(key, ''))
+            if m and is_usable_url(m.group(0)):
+                link = m.group(0)
+                break
+        link = link or item['file_url']
+        title_line = f"*<{link}|{i}. {title}>*" if link else f"*{i}. {title}*"
 
-# upstream이 파일을 중간에서 잘라먹으면 마지막 항목이 제목만 남는 경우가 있음.
-# 끝에 매달린 구분선/이미지/제목만 있는 섹션은 잘라냄.
-def is_dangling(block):
-    if block["type"] in ("divider", "image"):
-        return True
-    if block["type"] == "section":
-        return re.fullmatch(r'\*[^\n*]+\*', block["text"]["text"].strip()) is not None
-    return False
+        text = f"{title_line}\n{clean_markdown(f['요약'])}"
+        if f.get('쉬운설명'):
+            easy = re.sub(r'\s+', ' ', clean_markdown(f['쉬운설명'])).strip()
+            text += f"\n\n_💡 {easy}_"
+        append_section(blocks, text)
 
-while len(blocks) > 2 and is_dangling(blocks[-1]):
-    blocks.pop()
+        # 메타 정보는 작은 회색 글씨(context)로
+        meta = []
+        if f.get('관련분야'):
+            topics = [t.strip(' -·•') for t in f['관련분야'].split('\n') if t.strip(' -·•')]
+            meta.append(' · '.join(topics))
+        if f.get('중요도'):
+            m = re.search(r'\d+', f['중요도'])
+            if m:
+                meta.append(f"중요도 {m.group(0)}/10")
+        if f.get('추천수'):
+            m = re.search(r'\d+', f['추천수'])
+            if m:
+                meta.append(f"👍 {m.group(0)}")
+        if meta:
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": "   ·   ".join(meta)}],
+            })
+    return blocks
+
+# --- 2차(폴백): 일반 라인 단위 변환 ---
+
+def build_generic_blocks(content):
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": main_header, "emoji": True}},
+        {"type": "divider"},
+    ]
+    buffer = []
+
+    def flush():
+        if buffer:
+            append_section(blocks, '\n'.join(buffer))
+            buffer.clear()
+
+    bold_next_line = False
+    for line in content.split('\n'):
+        line = line.strip()
+        if line.startswith("다음 단계 제안"):
+            break
+        if line.startswith("(주의"):
+            continue
+
+        img_match = re.search(r'!\[(.*?)\]\((.*?)\)', line)
+        if img_match:
+            alt_text, url = img_match.group(1).strip(), img_match.group(2).strip()
+            if is_usable_url(url) and is_image_url(url):
+                if image_actually_loads(url):
+                    flush()
+                    blocks.append({"type": "image", "image_url": url,
+                                   "alt_text": alt_text or "News Image"})
+            elif is_usable_url(url):
+                buffer.append(f"📄 <{url}|{alt_text or '파일 보기'}>")
+            # 잘린/깨진 URL은 표시할 방법이 없으므로 조용히 버림
+        elif line.startswith('![') or line.startswith('https://scontent'):
+            continue
+        elif line == '---':
+            flush()
+            blocks.append({"type": "divider"})
+        elif line.startswith('##'):
+            flush()
+            heading = clean_markdown(line.lstrip('#').strip())
+            if heading.startswith('제목:'):
+                heading = heading[len('제목:'):].strip()
+            if heading:
+                buffer.append(f"*{heading}*")
+            else:
+                bold_next_line = True
+        elif line:
+            cleaned = clean_markdown(line)
+            if cleaned:
+                if bold_next_line:
+                    cleaned = f"*{cleaned}*"
+                    bold_next_line = False
+                buffer.append(cleaned)
+    flush()
+
+    # 파일이 중간에서 잘려 제목만 남은 꼬리 항목 등 정리
+    def is_dangling(block):
+        if block["type"] in ("divider", "image"):
+            return True
+        if block["type"] == "section":
+            return re.fullmatch(r'\*[^\n*]+\*', block["text"]["text"].strip()) is not None
+        return False
+
+    while len(blocks) > 2 and is_dangling(blocks[-1]):
+        blocks.pop()
+    return blocks
+
+# --- 변환 및 전송 ---
+
+items = parse_items(md_content)
+if items:
+    print(f"구조적 파싱 성공: {len(items)}개 항목")
+    blocks = build_structured_blocks(items)
+else:
+    print("구조적 파싱 실패 → 일반 변환으로 폴백")
+    blocks = build_generic_blocks(md_content)
 
 if len(blocks) <= 2:
     print(f"⚠️ 전송할 본문이 없습니다({category}), Slack 전송 안 함 -> {file_path}")
