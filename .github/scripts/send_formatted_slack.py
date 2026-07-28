@@ -90,6 +90,18 @@ def is_image_url(url):
     path = urlparse(url).path.lower()
     return path.endswith(IMAGE_EXTENSIONS)
 
+def image_actually_loads(url):
+    # upstream이 서명 파라미터를 잘라먹은 CDN URL은 403이 남.
+    # Slack은 로드 안 되는 image 블록이 있으면 메시지 전체를 거부하므로 사전 확인.
+    try:
+        r = requests.get(url, timeout=5, stream=True,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+        ok = r.status_code == 200 and r.headers.get('Content-Type', '').startswith('image/')
+        r.close()
+        return ok
+    except requests.RequestException:
+        return False
+
 def clean_markdown(text):
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)  # 굵게
     text = re.sub(r'\[(.*?)\]\((.*?)\)', r'<\2|\1>', text)  # 링크
@@ -136,12 +148,14 @@ for line in md_content.split('\n'):
     if img_match:
         alt_text, url = img_match.group(1).strip(), img_match.group(2).strip()
         if is_usable_url(url) and is_image_url(url):
-            flush_text_buffer()
-            blocks.append({
-                "type": "image",
-                "image_url": url,
-                "alt_text": alt_text or "News Image",
-            })
+            # 로드에 실패하는 이미지(서명 잘린 CDN URL 등)는 조용히 버림
+            if image_actually_loads(url):
+                flush_text_buffer()
+                blocks.append({
+                    "type": "image",
+                    "image_url": url,
+                    "alt_text": alt_text or "News Image",
+                })
         elif is_usable_url(url):
             # 이미지가 아닌 파일(예: arXiv PDF)은 텍스트 링크로
             label = alt_text or "파일 보기"
