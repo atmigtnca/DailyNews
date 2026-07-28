@@ -8,6 +8,9 @@ on:
     - cron: '7 7 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   send-newsletter:
     runs-on: ubuntu-latest
@@ -25,13 +28,14 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Sync content from upstream
-        # sync-fork 워크플로의 push 타이밍에 의존하지 않도록,
-        # 전송 직전에 upstream 최신 내용을 직접 가져와서 사용한다.
+      - name: Get latest content from upstream
+        # 콘텐츠 폴더만 upstream 최신으로 덮어씀.
+        # (전체 checkout을 하면 upstream에 없는 우리 전송 스크립트가 사라짐)
         run: |
           git remote add upstream https://github.com/GENEXIS-AI/DailyNews.git
           git fetch upstream
-          git checkout upstream/main
+          git checkout upstream/main -- 뉴스레터 논문
+          git restore --staged 뉴스레터 논문
 
       - name: Send today's report to Slack
         env:
@@ -48,12 +52,32 @@ jobs:
             *)           DIRS="뉴스레터 논문" ;;
           esac
 
+          PROCESSED=0
           for DIR in $DIRS; do
             FILE=$(ls "$DIR"/"$TODAY"-*.md 2>/dev/null | sort | tail -n 1)
             if [ -z "$FILE" ]; then
               echo "⚠️ 오늘($TODAY)자 $DIR 리포트가 아직 없습니다. 건너뜁니다."
               continue
             fi
+
+            # 중복 발송 방지: 수동 실행과 지연된 cron이 겹쳐도 같은 파일은 한 번만
+            MARKER=".sent-${DIR}.txt"
+            if [ "$(cat "$MARKER" 2>/dev/null)" = "$FILE" ]; then
+              echo "⏭️ 이미 처리한 파일입니다. 건너뜁니다: $FILE"
+              continue
+            fi
+
             echo "🚀 Sending file: $FILE"
             FILE_PATH="$FILE" python .github/scripts/send_formatted_slack.py
+            echo "$FILE" > "$MARKER"
+            PROCESSED=1
           done
+
+          # 처리 기록을 저장해 다음 실행에서 중복 발송을 막음
+          if [ "$PROCESSED" = "1" ]; then
+            git config user.name 'github-actions'
+            git config user.email 'action@github.com'
+            git add .sent-*.txt
+            git commit -m "전송 기록 갱신: $TODAY"
+            git push origin HEAD:main || echo "⚠️ 전송 기록 push 실패 (전송 자체는 완료됨)"
+          fi
