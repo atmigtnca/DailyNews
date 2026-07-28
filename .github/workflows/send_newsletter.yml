@@ -1,11 +1,11 @@
 name: Send Newsletter
 
 on:
-  push:
-    paths:
-      - '뉴스레터/**'
-      - '프로덕트/**'
-      - '논문/**'
+  schedule:
+    # 10:07 KST (01:07 UTC) - 뉴스레터 (upstream은 07:00 KST에 발행)
+    - cron: '7 1 * * *'
+    # 16:07 KST (07:07 UTC) - 논문 (upstream은 15:00 KST에 발행)
+    - cron: '7 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -25,48 +25,35 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Find changed files and Send Slack
+      - name: Sync content from upstream
+        # sync-fork 워크플로의 push 타이밍에 의존하지 않도록,
+        # 전송 직전에 upstream 최신 내용을 직접 가져와서 사용한다.
+        run: |
+          git remote add upstream https://github.com/GENEXIS-AI/DailyNews.git
+          git fetch upstream
+          git checkout upstream/main
+
+      - name: Send today's report to Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           git config --global core.quotepath false
-          
-          echo "=== 1. 변경된 파일 감지 시작 ==="
-          
-          # Push 이벤트일 경우: 커밋 내역에서 변경된 모든 md 파일 찾기 (head -n 1 제거됨)
-          if [ "${{ github.event_name }}" == "push" ]; then
-             CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep -E '^(뉴스레터|프로덕트|논문)/.*\.md$' || true)
-          else
-             # 수동 실행(workflow_dispatch)일 경우: 각 폴더별로 가장 최신 파일 하나씩 다 가져오기
-             # (뉴스레터 최신 1개 + 프로덕트 최신 1개 + 논문 최신 1개 = 최대 3개 전송)
-             FILE1=$(find 뉴스레터 -name "*.md" 2>/dev/null | sort -r | head -n 1)
-             FILE2=$(find 프로덕트 -name "*.md" 2>/dev/null | sort -r | head -n 1)
-             FILE3=$(find 논문 -name "*.md" 2>/dev/null | sort -r | head -n 1)
-             CHANGED_FILES="$FILE1 $FILE2 $FILE3"
-          fi
 
-          # 변경된 파일이 하나도 없으면 종료
-          # (공백 제거 후 확인)
-          if [ -z "$(echo "$CHANGED_FILES" | tr -d '[:space:]')" ]; then
-            echo "No matching files found."
-            exit 0
-          fi
+          TODAY=$(TZ=Asia/Seoul date +%F)
 
-          echo "전송할 파일 목록:"
-          echo "$CHANGED_FILES"
-          echo "=================================="
+          # 어느 cron이 깨웠는지에 따라 카테고리 결정 (수동 실행이면 둘 다)
+          case "${{ github.event.schedule }}" in
+            "7 1 * * *") DIRS="뉴스레터" ;;
+            "7 7 * * *") DIRS="논문" ;;
+            *)           DIRS="뉴스레터 논문" ;;
+          esac
 
-          # 3. 반복문(Loop): 찾은 파일 개수만큼 파이썬 스크립트 반복 실행
-          for FILE in $CHANGED_FILES; do
-            # 파일이 실제로 존재하고 비어있지 않은 문자열일 때만 실행
-            if [ -n "$FILE" ] && [ -f "$FILE" ]; then
-              echo "----------------------------------------"
-              echo "🚀 Sending file: $FILE"
-              
-              # 파이썬 스크립트에 현재 처리 중인 파일 경로를 환경변수로 넘김
-              export FILE_PATH="$FILE"
-              python .github/scripts/send_formatted_slack.py
-              
-              echo "✅ Done: $FILE"
+          for DIR in $DIRS; do
+            FILE=$(ls "$DIR"/"$TODAY"-*.md 2>/dev/null | sort | tail -n 1)
+            if [ -z "$FILE" ]; then
+              echo "⚠️ 오늘($TODAY)자 $DIR 리포트가 아직 없습니다. 건너뜁니다."
+              continue
             fi
+            echo "🚀 Sending file: $FILE"
+            FILE_PATH="$FILE" python .github/scripts/send_formatted_slack.py
           done
