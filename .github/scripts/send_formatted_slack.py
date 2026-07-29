@@ -168,6 +168,13 @@ def parse_items(content):
                 fields[current_key] = (fields[current_key] + '\n' + line).strip()
         if fields.get('제목') and fields.get('요약'):
             items.append({'fields': fields, 'images': images, 'file_url': file_url})
+
+    # 파일이 생성 도중 잘리면 마지막 항목이 제목·요약 일부만 남음.
+    # 정상 항목은 항상 메타 필드(관련분야/중요도/추천수/링크) 중 하나 이상을 가지므로
+    # 그게 전무한 꼬리 항목은 잘린 것으로 보고 조용히 제외.
+    META_KEYS = ('관련분야', '중요도', '추천수', '전체링크', 'PDF 다운로드 링크')
+    while items and not any(k in items[-1]['fields'] for k in META_KEYS):
+        items.pop()
     return items
 
 def build_structured_blocks(items):
